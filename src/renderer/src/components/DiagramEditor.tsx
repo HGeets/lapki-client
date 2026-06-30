@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-
+import { useTabs } from '@renderer/store/useTabs';
 import {
   NoteEdit,
   StateNameEdit,
@@ -48,9 +48,6 @@ export const DiagramEditor: React.FC<DiagramEditorProps> = (props: DiagramEditor
   };
 
   useEffect(() => {
-    // Проверяем на идентификатор '', чтобы не совершать какие-либо операции
-    // над "призрачным" канвасом, который нужен только при запуске приложения,
-    // когда мы еще не редактируем какую-либо машину состояний.
     if (!containerRef.current || controller.id === '') return;
     editor.mount(containerRef.current);
 
@@ -64,6 +61,23 @@ export const DiagramEditor: React.FC<DiagramEditorProps> = (props: DiagramEditor
         position,
         placeInCenter: true,
       });
+    };
+
+    // НАШ НОВЫЙ ОБРАБОТЧИК ДЛЯ ВКЛАДОК
+    const handleChangeState = (state: State) => {
+      if (controller.type === 'scheme') return;
+      
+      const tabName = `State: ${state.data.name ?? 'Без названия'}`;
+      
+      // Передаем modelController первым аргументом, а объект вкладки — вторым
+      useTabs.getState().openTab(modelController, {
+        type: 'state_editor',    // Ваш кастомный тип вкладки для редактора состояний
+        name: tabName,
+        canvasId: controller.id,
+        nodeId: state.id,        // Передаем ID конкретного состояния
+      } as any);                 // as any спасет от ругани TS, если в типе Tab жесткий enum типов
+      
+      setSmId(state.smId);
     };
 
     const handleChangeEvent = (data: {
@@ -88,21 +102,20 @@ export const DiagramEditor: React.FC<DiagramEditorProps> = (props: DiagramEditor
       setSmId(state.smId);
     };
 
+    // Подписываемся на события
     editor.view.on('dblclick', handleDblclick);
     editor.controller.states.on('changeEvent', handleChangeEvent);
+    editor.controller.states.on('changeState', handleChangeState); // ПОДПИСКА ТУТ
 
     //! Не забывать удалять слушатели
     return () => {
       editor.view.off('dblclick', handleDblclick);
       editor.controller.states.off('changeEvent', handleChangeEvent);
+      editor.controller.states.off('changeState', handleChangeState); // ОЧИСТКА ТУТ
       editor.unmount();
     };
-    // FIXME: containerRef не влияет на перезапуск эффекта.
-    // Скорее всего, контейнер меняться уже не будет, поэтому
-    // реф закомментирован, но если что, https://stackoverflow.com/a/60476525.
-    // }, [ containerRef.current ]);
-  }, [editor, eventModal.openEditEventModal, openActionsModal]);
-
+  }, [editor, eventModal.openEditEventModal, openActionsModal, controller, modelController, smId]); 
+  // Обновили зависимости useEffect, чтобы ts не ругался
   useEffect(() => {
     if (!canvasSettings) return;
     editor.setSettings(canvasSettings);
@@ -143,7 +156,6 @@ export const DiagramEditor: React.FC<DiagramEditorProps> = (props: DiagramEditor
             smId={smId}
             controller={controller}
           />
-          <StateModal smId={smId} controller={controller} />
           <TransitionModal controller={controller} smId={smId} />
           <ActionsModal
             idx={actionsModalParentData?.eventSelection.actionIdx ?? null}

@@ -1,5 +1,4 @@
 import throttle from 'lodash.throttle';
-
 import { CanvasEditor } from '@renderer/lib/CanvasEditor';
 import { EventEmitter } from '@renderer/lib/common';
 import {
