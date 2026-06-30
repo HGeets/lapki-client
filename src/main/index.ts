@@ -147,33 +147,6 @@ app.whenReady().then(() => {
   const mainWindow = createWindow();
   initFileHandlersIPC();
 
-  // окно для редактора состояний
-  ipcMain.on('open-empty-window', () => {
-    const stateWindow = new BrowserWindow({
-      width: 800,
-      height: 600,
-      title: 'Редактор состояния',
-      autoHideMenuBar: true,
-      ...(process.platform === 'win32' ? { icon } : {}),
-      webPreferences: {
-        preload: join(__dirname, '../preload/index.js'),
-        sandbox: false,
-        webSecurity: false,
-      }
-    });
-
-    stateWindow.setMenuBarVisibility(false); // Скрываем верхнее меню браузера
-
-    // Загружаем React-приложение с хэшем #/state-editor
-    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-      stateWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/#/state-editor`);
-      stateWindow.webContents.openDevTools(); 
-    } else {
-      stateWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'state-editor' });
-    }
-  });
-  // ---------------------------------------------------------
-
   ipcMain.handle('Module:reboot', async (_event, module: ModuleName) => {
     await ModuleManager.stopModule(module);
     await ModuleManager.startLocalModule(module);

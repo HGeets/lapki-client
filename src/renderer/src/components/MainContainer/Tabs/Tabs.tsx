@@ -1,133 +1,107 @@
-import { useEffect, useState } from 'react';
-
+// src/components/MainContainer/Tabs/Tabs.tsx
+import { useState } from 'react';
 import { twMerge } from 'tailwind-merge';
 
 import { CodeEditor, DiagramEditor } from '@renderer/components';
 import { FlasherTab } from '@renderer/components/Sidebar/Flasher/Flasher';
 import { SerialMonitorTab } from '@renderer/components/Sidebar/Flasher/SerialMonitor';
+import { StateEditorLayout } from '@renderer/components/NodeModal/StateEditorLayout'; // <-- Импорт нового компонента
 import { useModelContext } from '@renderer/store/ModelContext';
 import { useTabs } from '@renderer/store/useTabs';
 import { Tab as TabType } from '@renderer/types/tabs';
 
 import { Tab } from './Tab';
-
 import { NotInitialized } from '../NotInitialized';
 
-// КОМПОНЕНТ
-
-const StateWindowTrigger = ({ controller }: { controller: any }) => {
-  useEffect(() => {
-    const handler = (stateNode: any) => {
-      console.log('Открываем окно для состояния:', stateNode);
-      // Отправляем простой сигнал в главный процесс Electron
-      window.electron.ipcRenderer.send('open-empty-window');
-    };
-
-    // Подписываемся на событие двойного клика по состоянию
-    controller.states.on('changeState', handler);
-
-    return () => {
-      controller.states.off('changeState', handler);
-    };
-  }, [controller]);
-
-  return null; // Компонент ничего не рендерит, он только слушает
-};
-
 export const Tabs: React.FC = () => {
-  const modelController = useModelContext();
-  const [items, activeTab, setActiveTab, swapTabs, closeTab] = useTabs((state) => [
-    state.items,
-    state.activeTab,
-    state.setActiveTab,
-    state.swapTabs,
-    state.closeTab,
-  ]);
+  const modelController = useModelContext();
+  const [items, activeTab, setActiveTab, swapTabs, closeTab] = useTabs((state) => [
+    state.items,
+    state.activeTab,
+    state.setActiveTab,
+    state.swapTabs,
+    state.closeTab,
+  ]);
 
-  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
 
-  const handleDrag = (tabName: string) => {
-    setDragId(tabName);
-  };
+  const handleDrag = (tabName: string) => setDragId(tabName);
 
-  const handleDrop = (tabName: string) => {
-    if (tabName === 'editor' || !dragId) return;
+  const handleDrop = (tabName: string) => {
+    if (tabName === 'editor' || !dragId) return;
+    swapTabs(dragId, tabName);
+  };
 
-    swapTabs(dragId, tabName);
-  };
+  if (items.length === 0) {
+    return (
+      <div className="flex h-full w-full flex-row items-center justify-center overflow-auto align-middle scrollbar-thin scrollbar-track-transparent scrollbar-thumb-current">
+        <NotInitialized />
+      </div>
+    );
+  }
 
-  if (items.length === 0) {
-    return (
-      <div className="flex h-full w-full flex-row items-center justify-center overflow-auto align-middle scrollbar-thin scrollbar-track-transparent scrollbar-thumb-current">
-        <NotInitialized />
-      </div>
-    );
-  }
+  const selectTab = (item: TabType) => {
+    switch (item.type) {
+      case 'editor':
+        if (!modelController.controllers[item.canvasId]) return undefined;
+        return (
+          <DiagramEditor
+            controller={modelController.controllers[item.canvasId]}
+            editor={modelController.controllers[item.canvasId].app}
+          />
+        );
+      case 'state_editor': // <-- Интеграция нового редактора
+        if (!modelController.controllers[item.canvasId]) return undefined;
+        return (
+          <StateEditorLayout 
+            controller={modelController.controllers[item.canvasId]}
+            nodeId={item.nodeId} 
+          />
+        );
+      case 'transition':
+      case 'state':
+      case 'code':
+        return <CodeEditor initialValue={item.code} language={item.language} />;
+      case 'serialMonitor':
+        return <SerialMonitorTab isTabOpen={item.isOpen} />;
+      case 'managerMS':
+        return <FlasherTab />;
+      default:
+        return undefined;
+    }
+  };
 
-  const selectTab = (item: TabType) => {
-    switch (item.type) {
-      case 'editor':
-        // Вкладки удаляются только после удаления контроллеров.
-        // И до удаления вкладок вызывается ререндер, вызывающий эту функцию
-        if (!modelController.controllers[item.canvasId]) return undefined;
-        return (
-          <>
-            <DiagramEditor
-              controller={modelController.controllers[item.canvasId]}
-              editor={modelController.controllers[item.canvasId].app}
-            />
-            {/* Добавляем наш слушатель рядом с редактором */}
-            <StateWindowTrigger controller={modelController.controllers[item.canvasId]} />
-          </>
-        );
-      case 'transition':
-      case 'state':
-      case 'code':
-        return <CodeEditor initialValue={item.code} language={item.language} />;
-      case 'serialMonitor':
-        return <SerialMonitorTab isTabOpen={item.isOpen} />;
-      case 'managerMS':
-        return <FlasherTab />;
-      default:
-        return undefined;
-    }
-  };
+  return (
+    <>
+      <section
+        className="flex gap-1 overflow-x-auto break-words border-b border-border-primary bg-bg-secondary px-1 py-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-current"
+        tabIndex={-1}
+      >
+        {items.map((tab) => (
+          <Tab
+            key={tab.name}
+            isActive={activeTab === tab.name}
+            isDragging={dragId === tab.name}
+            draggable={true}
+            type={tab.type}
+            name={tab.name}
+            showName={true}
+            onDragStart={() => handleDrag(tab.name)}
+            onDrop={() => handleDrop(tab.name)}
+            onMouseDown={() => setActiveTab(modelController, tab.name)}
+            onClose={() => closeTab(tab.name, modelController)}
+          />
+        ))}
+      </section>
 
-  return (
-    <>
-      <section
-        className="flex gap-1 overflow-x-auto break-words border-b border-border-primary bg-bg-secondary px-1 py-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-current"
-        tabIndex={-1}
-      >
-        {items.map((tab) => (
-          <Tab
-            key={tab.name}
-            isActive={activeTab === tab.name}
-            isDragging={dragId === tab.name}
-            draggable={true}
-            type={tab.type}
-            name={tab.name}
-            showName={true}
-            onDragStart={() => handleDrag(tab.name)}
-            onDrop={() => handleDrop(tab.name)}
-            onMouseDown={() => {
-              setActiveTab(modelController, tab.name);
-            }}
-            onClose={() => {
-              closeTab(tab.name, modelController);
-            }}
-          />
-        ))}
-      </section>
-
-      {items.map((item) => (
-        <div
-          key={item.name}
-          className={twMerge('hidden h-[calc(100vh-44.19px)]', activeTab === item.name && 'block')}
-        >
-          {selectTab(item)}
-        </div>
-      ))}
-    </>
-  );
+      {items.map((item) => (
+        <div
+          key={item.name}
+          className={twMerge('hidden h-[calc(100vh-44.19px)]', activeTab === item.name && 'block')}
+        >
+          {selectTab(item)}
+        </div>
+      ))}
+    </>
+  );
 };
