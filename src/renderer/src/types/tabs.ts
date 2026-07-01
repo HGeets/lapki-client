@@ -24,4 +24,12 @@ export interface ManagerMSTab {
   name: string;
 }
 
-export type Tab = EditorTab | CodeTab | SerialMonitorTab | ManagerMSTab;
+export interface StateEditorTab {
+  type: 'stateEditor';
+  name: string;
+  canvasId: string;
+  smId: string;
+  stateId: string;
+}
+
+export type Tab = EditorTab | CodeTab | SerialMonitorTab | ManagerMSTab | StateEditorTab;
