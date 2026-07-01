@@ -19,6 +19,9 @@ interface TabsState {
 const changeHeadController = (newActiveTab: Tab, modelController: ModelController) => {
   if (newActiveTab.type === 'editor') {
     modelController.changeHeadControllerId(newActiveTab.canvasId);
+  } else if (newActiveTab.type === 'stateEditor') {
+    // чтоб всё находилось и норм работало 
+    modelController.changeHeadControllerId(newActiveTab.canvasId);
   } else {
     modelController.changeHeadControllerId('');
   }

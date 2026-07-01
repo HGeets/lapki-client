@@ -96,28 +96,36 @@ export const Action: React.FC<ActionProps> = (props) => {
           <div>{getMethod(data.component, data.method)}</div>
           <div>(</div>
           <div className="flex items-center gap-[2px]">
+            {/* добавил key={id} тут, без него react ругался в консоли "each child should have unique key" */}
             {sortedParameters.map(([id, value], index) => {
               const protoComponent =
                 platform.data.components[platform.resolveComponentType(data.component)];
               if (!protoComponent) {
-                return <>{serializeParameter(index, value.value)}</>;
+                return (
+                  <React.Fragment key={id}>{serializeParameter(index, value.value)}</React.Fragment>
+                );
               }
               const protoMethod = protoComponent.methods[data.method];
               const protoParameters = protoMethod.parameters;
 
-              if (!protoParameters) return <>{serializeParameter(index, value.value)}</>;
+              if (!protoParameters)
+                return (
+                  <React.Fragment key={id}>{serializeParameter(index, value.value)}</React.Fragment>
+                );
 
               const parameter = protoParameters.find((param) => param.name === id);
 
               if (!parameter || !parameter.type)
-                return <>{serializeParameter(index, value.value)}</>;
+                return (
+                  <React.Fragment key={id}>{serializeParameter(index, value.value)}</React.Fragment>
+                );
 
               if (typeof parameter.type === 'string' && isMatrix(parameter.type)) {
                 const dimensions = getMatrixDimensions(parameter.type);
 
                 if (Array.isArray(value.value) && typeof value.value[0][0] === 'number') {
                   return (
-                    <>
+                    <React.Fragment key={id}>
                       {index !== 0 && ', '}
                       <MatrixWidget
                         key={`${smId}-${dimensions.width}-${dimensions.height}`}
@@ -136,7 +144,7 @@ export const Action: React.FC<ActionProps> = (props) => {
                         range={parameter.range ?? getDefaultRange()}
                         isHalf={false}
                       />
-                    </>
+                    </React.Fragment>
                   );
                 }
               }
@@ -150,13 +158,16 @@ export const Action: React.FC<ActionProps> = (props) => {
                 const valueIndex = parameter.type.findIndex((option) => value.value === option);
                 if (valueIndex !== -1) {
                   return (
-                    <>
+                    <React.Fragment key={id}>
                       {serializeParameter(index, parameter.valueAlias[valueIndex] ?? value.value)}
-                    </>
+                    </React.Fragment>
                   );
                 }
               }
-              return <>{serializeParameter(index, value.value)}</>;
+              // добавил key, чтобы react не жаловася, гугл сказал поможет
+              return (
+                <React.Fragment key={id}>{serializeParameter(index, value.value)}</React.Fragment>
+              );
             })}
           </div>
           <div>)</div>

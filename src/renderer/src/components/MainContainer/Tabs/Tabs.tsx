@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { twMerge } from 'tailwind-merge';
 
 import { CodeEditor, DiagramEditor } from '@renderer/components';
+// и импорт новый
+import { StateModal } from '@renderer/components/NodeModal';
 import { FlasherTab } from '@renderer/components/Sidebar/Flasher/Flasher';
 import { SerialMonitorTab } from '@renderer/components/Sidebar/Flasher/SerialMonitor';
 import { useModelContext } from '@renderer/store/ModelContext';
@@ -59,6 +61,9 @@ export const Tabs: React.FC = () => {
       case 'state':
       case 'code':
         return <CodeEditor initialValue={item.code} language={item.language} />;
+      //кейс новый
+      case 'stateEditor':
+        return <StateModal canvasId={item.canvasId} smId={item.smId} stateId={item.stateId} />;
       case 'serialMonitor':
         return <SerialMonitorTab isTabOpen={item.isOpen} />;
       case 'managerMS':

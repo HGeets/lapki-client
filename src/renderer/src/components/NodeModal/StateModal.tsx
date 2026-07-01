@@ -1,210 +1,252 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
-import { ReactComponent as AddIcon } from '@renderer/assets/icons/add.svg';
-import { ReactComponent as EditIcon } from '@renderer/assets/icons/edit.svg';
-import { ReactComponent as SubtractIcon } from '@renderer/assets/icons/subtract.svg';
-import { Modal } from '@renderer/components/UI';
-import { useEditEventModal } from '@renderer/hooks';
-import { useModal } from '@renderer/hooks/useModal';
-import { serializeCondition, serializeEvent } from '@renderer/lib/data/GraphmlBuilder';
-import { CanvasController } from '@renderer/lib/data/ModelController/CanvasController';
+import { toast } from 'sonner';
+
 import { PlatformManager } from '@renderer/lib/data/PlatformManager';
-import { State } from '@renderer/lib/drawable';
 import { useModelContext } from '@renderer/store/ModelContext';
-import { Component, Condition, EventData } from '@renderer/types/diagram';
+import { EventData } from '@renderer/types/diagram';
 
-import { ColorField, Event as EventPicto } from './components';
-import { EditEventModal } from './EditEventModal';
+import { Actions, Trigger, Condition, Event as EventPicto } from './components';
+import { useTrigger, useActions, useCondition } from './hooks';
 
 interface StateModalProps {
+  canvasId: string;
   smId: string;
-  controller: CanvasController;
+  stateId: string;
 }
 
-/**
- * Модальное окно редактирования состояния
- */
-export const StateModal: React.FC<StateModalProps> = ({ smId, controller }) => {
+// EditEventModal но без модалки
+export const StateModal: React.FC<StateModalProps> = ({ canvasId, smId, stateId }) => {
   const modelController = useModelContext();
-  const components = modelController.model.useData(smId, 'elements.components') as {
-    [id: string]: Component;
-  };
-  const visual = modelController.model.useData(smId, 'elements.visual') as boolean;
+  const controller = modelController.controllers[canvasId] ?? modelController.controllers[''];
+  const controllerFound = Boolean(modelController.controllers[canvasId]);
+
   modelController.model.useData(smId, 'elements.states');
-  const platforms = controller.useData('platform') as { [id: string]: PlatformManager };
+
+  const [currentEventIndex, setCurrentEventIndex] = useState<number | undefined>(undefined);
+
+  const state = controller ? controller.states.get(stateId) : null;
+  const platforms = (controller?.useData('platform') ?? {}) as { [id: string]: PlatformManager };
   const platform = platforms[smId];
-  const [isOpen, open, close] = useModal(false);
-  const { openEditEventModal, props, closeEditEventModal } = useEditEventModal();
-  const [state, setState] = useState<State | null>(null);
 
-  // Данные формы
-  const [currentEventIndex, setCurrentEventIndex] = useState<number | undefined>();
-  const [currentEvent, setCurrentEvent] = useState<EventData | null>(null);
-  const [color, setColor] = useState<string | undefined>();
+  const currentEvent =
+    state && currentEventIndex !== undefined ? state.data.events[currentEventIndex] : null;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    openEditEventModal();
+  // хуки формы с EditEventModal опять да
+  const trigger = useTrigger(smId, controller, true, currentEvent?.trigger);
+  const condition = useCondition(smId, controller, currentEvent?.condition);
+  const actions = useActions(smId, controller, currentEvent?.do ?? null);
+
+  const showCondition = useMemo(
+    () => trigger.selectedComponent !== 'System',
+    [trigger.selectedComponent]
+  );
+
+  if (!controllerFound) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-text-inactive">
+        Контроллер диаграммы не найден.
+      </div>
+    );
+  }
+
+  if (!state) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-text-inactive">
+        Состояние не найдено (возможно, оно было удалено).
+      </div>
+    );
+  }
+
+  const selectEvent = (index: number) => {
+    // сброс формы
+    trigger.clear();
+    actions.clear();
+    condition.clear();
+    setCurrentEventIndex(index);
   };
 
-  // // Сброс формы после закрытия
-  const handleAfterClose = () => {
-    if (state) {
-      if (state.data.color !== color) {
-        modelController.changeState({
-          ...state.data,
-          color: color,
-          smId,
-          id: state.id,
-        });
-      }
-    }
-    setColor(undefined);
-
-    setState(null);
-    close();
-  };
-
-  // Открытие окна и подстановка начальных данных формы на событие изменения состояния
-  useEffect(() => {
-    const handler = (state: State) => {
-      const { data } = state;
-
-      setColor(data.color);
-
-      setState(state);
-      open();
-    };
-
-    controller.states.on('changeState', handler);
-
-    return () => {
-      controller.states.off('changeState', handler);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // костыль для того, чтобы при смене режима на текстовый парсеры работали верно
-
-  const addEvent = () => {
-    if (!state) return;
-
-    setCurrentEventIndex(state.data.events.length);
-    setCurrentEvent({ trigger: { component: 'System', method: 'onEnter' }, do: [] });
-    openEditEventModal();
-  };
-
-  const removeEvent = () => {
-    if (!state || currentEventIndex === undefined) return;
-
-    const getEvents = () => {
-      if (state.data.events.length === 1) {
-        return [];
-      }
-      return [
-        ...state.data.events.slice(0, currentEventIndex),
-        ...state.data.events.slice(currentEventIndex + 1, state.data.events.length),
-      ];
-    };
-
-    modelController.changeState({ smId: smId, id: state.id, events: getEvents() }, true);
+  const closeForm = () => {
+    trigger.clear();
+    actions.clear();
+    condition.clear();
     setCurrentEventIndex(undefined);
   };
 
-  const getCondition = (condition: string | Condition | undefined) => {
-    if (!condition) return '';
-    if (typeof condition === 'string') return `[${condition}]`;
-
-    return `[${serializeCondition(condition, platform.data, components, true)}]`;
+  const addEvent = () => {
+    const newIndex = state.data.events.length;
+    modelController.changeState({
+      smId,
+      id: state.id,
+      events: [
+        ...state.data.events,
+        { trigger: { component: 'System', method: 'onEnter' }, do: [] },
+      ],
+    });
+    setCurrentEventIndex(newIndex);
   };
 
-  const handleEventDoubleClick = (e: React.MouseEvent) => {
+  const removeEvent = () => {
+    if (currentEventIndex === undefined) return;
+
+    const newEvents =
+      state.data.events.length === 1
+        ? []
+        : [
+            ...state.data.events.slice(0, currentEventIndex),
+            ...state.data.events.slice(currentEventIndex + 1),
+          ];
+
+    modelController.changeState({ smId, id: state.id, events: newEvents }, true);
+    closeForm();
+  };
+
+  // handleSubmit из EditEventModal
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    e.stopPropagation();
-    openEditEventModal();
+    if (currentEventIndex === undefined) return;
+
+    const { selectedComponent, selectedMethod } = trigger;
+
+    const getCondition = () => {
+      const {
+        show,
+        isParamOneInput1,
+        selectedComponentParam1,
+        selectedMethodParam1,
+        isParamOneInput2,
+        selectedComponentParam2,
+        selectedMethodParam2,
+        argsParam1,
+        argsParam2,
+        conditionOperator,
+        isElse,
+      } = condition;
+
+      if (!show || !showCondition) return undefined;
+      if (isElse) return 'else';
+      if (condition.tabValue === 0) {
+        return {
+          type: conditionOperator as string,
+          value: [
+            {
+              type: isParamOneInput1 ? 'component' : 'value',
+              value: isParamOneInput1
+                ? {
+                    component: selectedComponentParam1 as string,
+                    method: selectedMethodParam1 as string,
+                    args: {},
+                  }
+                : (argsParam1 as string),
+            },
+            {
+              type: isParamOneInput2 ? 'component' : 'value',
+              value: isParamOneInput2
+                ? {
+                    component: selectedComponentParam2 as string,
+                    method: selectedMethodParam2 as string,
+                    args: {},
+                  }
+                : (argsParam2 as string),
+            },
+          ],
+        };
+      }
+
+      return condition.text.trim() || undefined;
+    };
+
+    const getTrigger = () => {
+      if (trigger.tabValue === 0)
+        return { component: selectedComponent as string, method: selectedMethod as string };
+      return trigger.text.trim();
+    };
+
+    const getActions = () => {
+      return actions.tabValue === 0 ? actions.actions : actions.text.trim();
+    };
+
+    const newEvent: EventData = {
+      trigger: getTrigger(),
+      condition: getCondition(),
+      do: getActions(),
+    };
+
+    const newEvents =
+      currentEventIndex >= state.data.events.length
+        ? [...state.data.events, newEvent]
+        : state.data.events.map((ev, i) => (i === currentEventIndex ? newEvent : ev));
+
+    modelController.changeState({ smId, id: state.id, events: newEvents });
+    toast.success('Событие сохранено!');
+    closeForm();
   };
 
   return (
-    <div>
-      <Modal
-        title={`Редактор состояния: ${state?.data.name}`}
-        isOpen={isOpen}
-        onRequestClose={close}
-        submitDisabled={currentEventIndex === undefined}
-        onAfterClose={handleAfterClose}
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex">
-            <div
-              onDoubleClick={addEvent}
-              className="ml-11 mr-3 h-96 w-full overflow-y-auto break-words rounded border border-border-primary bg-bg-secondary scrollbar-thin scrollbar-track-scrollbar-track scrollbar-thumb-scrollbar-thumb"
+    <div className="flex h-full w-full">
+      {/* слева список событий */}
+      <div className="flex w-1/3 min-w-[240px] flex-col border-r border-border-primary">
+        <div className="flex items-center justify-between gap-2 border-b border-border-primary bg-bg-secondary p-3">
+          <h2 className="truncate text-lg font-bold">{state.data.name}</h2>
+          <div className="flex gap-1">
+            <button type="button" className="btn-secondary px-2 py-1 text-sm" onClick={addEvent}>
+              + добавить
+            </button>
+            <button
+              type="button"
+              className="btn-secondary px-2 py-1 text-sm"
+              onClick={removeEvent}
+              disabled={currentEventIndex === undefined}
             >
-              {state &&
-                (state.data.events.length === 0 ? (
-                  <div className="flex h-full w-full select-none flex-row items-center justify-center text-center align-middle text-text-inactive">
-                    <span className="mr-2">Чтобы добавить событие, нажмите</span>
-                    <div>
-                      <AddIcon className="btn-secondary h-5 w-5 cursor-default border-text-inactive p-[0.5px]" />
-                    </div>
-                  </div>
-                ) : (
-                  state.data.events.map((event, key) => (
-                    <EventPicto
-                      smId={smId}
-                      onDoubleClick={handleEventDoubleClick}
-                      key={key}
-                      event={event.trigger}
-                      isSelected={key === currentEventIndex}
-                      platform={platform}
-                      condition={event.condition}
-                      text={`↳ ${
-                        typeof event.trigger !== 'string'
-                          ? serializeEvent(components, platform.data, event.trigger, visual)
-                          : event.trigger
-                      }${getCondition(event.condition)}/`}
-                      onClick={() => {
-                        setCurrentEventIndex(key);
-                        setCurrentEvent(state.data.events[key]);
-                      }}
-                    />
-                  ))
-                ))}
-            </div>
-            <div className="flex flex-col gap-2">
-              <button type="button" className="btn-secondary border-red p-1" onClick={addEvent}>
-                <AddIcon />
-              </button>
-              <button
-                type="button"
-                className="btn-secondary p-1"
-                onClick={removeEvent}
-                disabled={currentEventIndex === undefined}
-              >
-                <SubtractIcon />
-              </button>
-              <button
-                type="button"
-                className="btn-secondary p-1"
-                onClick={handleSubmit}
-                disabled={currentEventIndex === undefined}
-              >
-                <EditIcon />
-              </button>
-            </div>
+              удалить
+            </button>
           </div>
-          <ColorField label="Цвет обводки:" value={color} onChange={setColor} />
         </div>
-      </Modal>
-      <EditEventModal
-        isOpen={props.isEditEventModalOpen}
-        close={() => {
-          closeEditEventModal();
-          setCurrentEventIndex(undefined);
-        }}
-        smId={smId}
-        state={state}
-        currentEventIndex={currentEventIndex}
-        event={currentEvent}
-        controller={controller}
-      />
+
+        <div className="flex-1 overflow-y-auto bg-bg-secondary">
+          {state.data.events.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-text-inactive">
+              нет событий
+            </div>
+          ) : (
+            state.data.events.map((event, i) => (
+              <EventPicto
+                key={i}
+                smId={smId}
+                event={event.trigger}
+                isSelected={i === currentEventIndex}
+                platform={platform}
+                condition={event.condition}
+                onClick={() => selectEvent(i)}
+                onDoubleClick={() => selectEvent(i)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Trigger Condition Actions что и в EditEventModal */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {currentEventIndex === undefined ? (
+          <div className="flex h-full items-center justify-center text-text-inactive">
+            выберите событие слева или нажмите «+ добавить»
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            <Trigger event={currentEvent} {...trigger} />
+            {showCondition && <Condition {...condition} />}
+            <Actions event={currentEvent} {...actions} />
+            <div className="flex justify-end gap-2 border-t border-border-primary pt-3">
+              <button type="button" className="btn-secondary" onClick={closeForm}>
+                Отмена
+              </button>
+              <button type="submit" className="btn-primary">
+                Сохранить
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   );
 };
