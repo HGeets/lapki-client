@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import { isEqual } from 'lodash';
 import { toast } from 'sonner';
@@ -8,46 +8,220 @@ import { CanvasController } from '@renderer/lib/data/ModelController/CanvasContr
 import { systemComponent } from '@renderer/lib/data/PlatformManager';
 import { State } from '@renderer/lib/drawable';
 import { useModelContext } from '@renderer/store/ModelContext';
-import { Event, EventData } from '@renderer/types/diagram';
+import { Action, Event, EventData } from '@renderer/types/diagram';
 
 import { Actions, Trigger, Condition } from './components';
 import { useTrigger, useActions, useCondition } from './hooks';
 
-interface EditEventModalProps {
+interface EditEventModalBaseProps {
   smId: string;
   controller: CanvasController;
-  isOpen: boolean;
-  close: () => void;
   state: State | null;
   event: EventData | null | undefined;
   currentEventIndex: number | undefined;
 }
 
-/**
- * Модальное окно редактирования состояния
- */
-export const EditEventModal: React.FC<EditEventModalProps> = ({
-  isOpen,
-  close,
-  event,
-  smId,
-  state,
-  currentEventIndex,
-  controller,
-}) => {
+interface EditEventModalStandaloneProps extends EditEventModalBaseProps {
+  embedded?: false;
+  isOpen: boolean;
+  close: () => void;
+  submitRef?: never;
+  onSaved?: never;
+  onOpenActionsView?: never;
+  updateActionRef?: never;
+  getActionsRef?: never;
+}
+
+// Отображение контента без создания нового модального окна
+interface EditEventModalEmbeddedProps extends EditEventModalBaseProps {
+  embedded: true;
+  isOpen?: never;
+  close?: never;
+  onSaved: () => void;
+  submitRef: React.MutableRefObject<(() => void) | null>;
+  onOpenActionsView: (actionIndex: number | null) => void;
+  updateActionRef: React.MutableRefObject<((action: Action, idx: number | null) => void) | null>;
+  getActionsRef: React.MutableRefObject<(() => Action[]) | null>;
+}
+
+type EditEventModalProps = EditEventModalStandaloneProps | EditEventModalEmbeddedProps;
+
+export const EditEventModal: React.FC<EditEventModalProps> = (props) => {
+  const { smId, controller, state, event, currentEventIndex, embedded } = props;
+
   const modelController = useModelContext();
 
-  // Данные формы
   const trigger = useTrigger(smId, controller, true, event?.trigger);
   const condition = useCondition(smId, controller, event?.condition);
   const actions = useActions(smId, controller, event?.do ?? null);
   const [error, setError] = useState<string | undefined>(undefined);
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const [warning, setWarning] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!embedded) return;
+    trigger.parse(event?.trigger);
+    condition.parse(event?.condition);
+    actions.parse(smId, event?.do ?? undefined);
+    setError(undefined);
+    setWarning(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, event]);
+
+  if (embedded) {
+    props.updateActionRef.current = (action: Action, idx: number | null) => {
+      actions.setActions((prev) => {
+        const next = [...prev];
+        if (idx !== null) {
+          next[idx] = action;
+        } else {
+          next.push(action);
+        }
+        return next;
+      });
+    };
+    props.getActionsRef.current = () => actions.actions;
+  }
+
+  const showCondition = useMemo(
+    () => trigger.selectedComponent !== 'System',
+    [trigger.selectedComponent]
+  );
+
+  const { selectedComponent, selectedMethod } = trigger;
+
+  const {
+    show,
+    isParamOneInput1,
+    selectedComponentParam1,
+    selectedMethodParam1,
+    isParamOneInput2,
+    selectedComponentParam2,
+    selectedMethodParam2,
+    argsParam1,
+    argsParam2,
+    conditionOperator,
+    isElse,
+  } = condition;
+
+  // Собирает условие в том же формате, в котором оно хранится в state.data.events, чтобы можно было сравнивать
+  const getCondition = () => {
+    if (!show || !showCondition) return undefined;
+    if (isElse) return 'else';
+    if (condition.tabValue === 0) {
+      // Тут много as string потому что проверка на null в checkForErrors
+      return {
+        type: conditionOperator as string,
+        value: [
+          {
+            type: isParamOneInput1 ? 'component' : 'value',
+            value: isParamOneInput1
+              ? {
+                  component: selectedComponentParam1 as string,
+                  method: selectedMethodParam1 as string,
+                  args: {},
+                }
+              : (argsParam1 as string),
+          },
+          {
+            type: isParamOneInput2 ? 'component' : 'value',
+            value: isParamOneInput2
+              ? {
+                  component: selectedComponentParam2 as string,
+                  method: selectedMethodParam2 as string,
+                  args: {},
+                }
+              : (argsParam2 as string),
+          },
+        ],
+      };
+    }
+    return condition.text.trim() || undefined;
+  };
+
+  // Проверка событий на конфликты
+  const validateEventConflict = (): { type: 'error' | 'warning'; message: string } | undefined => {
+    if (!state) return undefined;
+    if (trigger.tabValue !== 0 || !selectedComponent || !selectedMethod) return undefined;
+
+    if (selectedComponent === 'System') {
+      const duplicated = state.data.events.findIndex(
+        (val) =>
+          (val.trigger as unknown as Event).component === 'System' &&
+          (val.trigger as unknown as Event).method === selectedMethod
+      );
+      if (duplicated !== -1 && currentEventIndex !== duplicated) {
+        const signalName = systemComponent.signals[selectedMethod]?.alias ?? selectedMethod;
+        return {
+          type: 'error',
+          message: `Cистемное событие «${signalName}» уже создано! Второй раз его создать нельзя.`,
+        };
+      }
+      return undefined;
+    }
+
+    const newCondition = getCondition();
+    for (const eventIdx in state.data.events) {
+      if (currentEventIndex === Number(eventIdx)) continue;
+      const ev = state.data.events[eventIdx];
+      const trig = ev.trigger;
+      if (
+        typeof trig === 'string' ||
+        trig.component !== selectedComponent ||
+        trig.method !== selectedMethod
+      ) {
+        continue;
+      }
+
+      if (isEqual(ev.condition, newCondition)) {
+        return {
+          type: 'error',
+          message: `Событие ${selectedComponent}.${selectedMethod} с таким условием уже существует!`,
+        };
+      }
+
+      const otherHasCondition = ev.condition !== undefined;
+      const thisHasCondition = newCondition !== undefined;
+      if (otherHasCondition !== thisHasCondition) {
+        return {
+          type: 'warning',
+          message: `Событие ${selectedComponent}.${selectedMethod} уже существует ${
+            otherHasCondition ? 'с условием' : 'без условия'
+          }. Одновременное наличие события с условием и без условия может работать некорректно.`,
+        };
+      }
+    }
+    return undefined;
+  };
+
+  // Динамическая проверка конфликтов без нажатия кнопки сохранения
+  useLayoutEffect(() => {
+    const conflict = validateEventConflict();
+    setError(conflict?.type === 'error' ? conflict.message : undefined);
+    setWarning(conflict?.type === 'warning' ? conflict.message : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedComponent,
+    selectedMethod,
+    show,
+    isElse,
+    isParamOneInput1,
+    selectedComponentParam1,
+    selectedMethodParam1,
+    isParamOneInput2,
+    selectedComponentParam2,
+    selectedMethodParam2,
+    argsParam1,
+    argsParam2,
+    conditionOperator,
+    condition.tabValue,
+    condition.text,
+  ]);
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
 
     if (!state) return;
 
-    const { selectedComponent, selectedMethod } = trigger;
     const triggerText = trigger.text.trim();
 
     if (
@@ -58,137 +232,47 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
       return;
     }
 
-    if (trigger.tabValue === 0 && selectedComponent === 'System') {
-      const duplicated = state.data.events.findIndex(
-        (val) =>
-          (val.trigger as unknown as Event).component === 'System' &&
-          (val.trigger as unknown as Event).method === selectedMethod
-      );
-      if (duplicated !== -1 && currentEventIndex !== duplicated) {
-        const signalName = selectedMethod
-          ? systemComponent.signals[selectedMethod]?.alias ?? selectedMethod
-          : selectedMethod;
-        setError(`Cистемное событие «${signalName}» уже создано! Второй раз его создать нельзя.`);
-        return;
-      }
+    const conflict = validateEventConflict();
+    if (conflict?.type === 'error') {
+      setError(conflict.message);
+      return;
     }
-
-    const {
-      show,
-      isParamOneInput1,
-      selectedComponentParam1,
-      selectedMethodParam1,
-      isParamOneInput2,
-      selectedComponentParam2,
-      selectedMethodParam2,
-      argsParam1,
-      argsParam2,
-      conditionOperator,
-      isElse,
-    } = condition;
 
     //Проверка на наличие пустых блоков условия, если же они пустые, то форма не отправляется
     if (showCondition && show && !isElse) {
       const errors = condition.checkForErrors();
-
       for (const key in errors) {
         if (errors[key]) return;
-      }
-    }
-
-    const getCondition = () => {
-      if (!show || !showCondition) return undefined;
-      if (isElse) return 'else';
-      if (condition.tabValue === 0) {
-        // Тут много as string потому что проверка на null в checkForErrors
-        return {
-          type: conditionOperator as string,
-          value: [
-            {
-              type: isParamOneInput1 ? 'component' : 'value',
-              value: isParamOneInput1
-                ? {
-                    component: selectedComponentParam1 as string,
-                    method: selectedMethodParam1 as string,
-                    args: {},
-                  }
-                : (argsParam1 as string),
-            },
-            {
-              type: isParamOneInput2 ? 'component' : 'value',
-              value: isParamOneInput2
-                ? {
-                    component: selectedComponentParam2 as string,
-                    method: selectedMethodParam2 as string,
-                    args: {},
-                  }
-                : (argsParam2 as string),
-            },
-          ],
-        };
-      }
-
-      return condition.text.trim() || undefined;
-    };
-
-    if (trigger.tabValue === 0) {
-      for (const eventIdx in state.data.events) {
-        if (currentEventIndex === Number(eventIdx)) continue;
-        const event = state.data.events[eventIdx];
-        const trigger = event.trigger;
-        const condition = event.condition;
-        if (
-          typeof trigger !== 'string' &&
-          trigger.component === selectedComponent &&
-          trigger.method === selectedMethod
-        ) {
-          const newCondition = getCondition();
-          if (isEqual(condition, newCondition)) {
-            setError(
-              `Событие ${selectedComponent}.${selectedMethod} с таким условием уже существует!`
-            );
-            return;
-          }
-        }
       }
     }
 
     const getTrigger = () => {
       if (trigger.tabValue === 0)
         return { component: selectedComponent as string, method: selectedMethod as string };
-
       return triggerText;
     };
 
-    const getActions = () => {
-      return actions.tabValue === 0 ? actions.actions : actions.text.trim();
-    };
+    const getActions = () => (actions.tabValue === 0 ? actions.actions : actions.text.trim());
 
     const getEvents = () => {
-      const currentEvent = {
-        trigger: getTrigger(),
-        condition: getCondition(),
-        do: getActions(),
-      };
+      const currentEvent = { trigger: getTrigger(), condition: getCondition(), do: getActions() };
       if (currentEventIndex !== undefined && currentEventIndex >= state.data.events.length) {
         return [...state.data.events, currentEvent];
       }
-
       if (currentEventIndex !== undefined) {
         return state.data.events.map((e, i) => (i === currentEventIndex ? currentEvent : e));
       }
-
       return [...state.data.events, currentEvent];
     };
-    modelController.changeState({
-      smId: smId,
-      id: state.id,
-      events: getEvents(),
-    });
 
+    modelController.changeState({ smId, id: state.id, events: getEvents() });
     toast.success('Событие сохранено!');
 
-    close();
+    if (embedded) {
+      props.onSaved();
+    } else {
+      props.close();
+    }
   };
 
   const handleAfterClose = () => {
@@ -196,27 +280,52 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
     actions.clear();
     condition.clear();
     setError(undefined);
+    setWarning(undefined);
   };
 
-  const showCondition = useMemo(
-    () => trigger.selectedComponent !== 'System',
-    [trigger.selectedComponent]
+  const content = (
+    <div className="flex flex-col gap-3">
+      <Trigger event={event} {...trigger} />
+      {showCondition && <Condition {...condition} />}
+      <Actions
+        event={event}
+        {...actions}
+        disabled={!!error}
+        {...(embedded
+          ? {
+              onAddAction: () => props.onOpenActionsView(null),
+              onChangeAction: (action) => {
+                const idx = actions.actions.findIndex(
+                  (a) =>
+                    a.component === action.component &&
+                    a.method === action.method &&
+                    JSON.stringify(a.args) === JSON.stringify(action.args)
+                );
+                props.onOpenActionsView(idx !== -1 ? idx : null);
+              },
+            }
+          : {})}
+      />
+      {error && <div className="text-error">{error}</div>}
+      {!error && warning && <div className="text-orange-400">{warning}</div>}
+    </div>
   );
+
+  if (embedded) {
+    // Пробрасываем handleSubmit в StateModal через ref
+    props.submitRef.current = handleSubmit;
+    return content;
+  }
 
   return (
     <Modal
-      title={`Редактор события:`}
+      title="Редактор события:"
       onSubmit={handleSubmit}
-      isOpen={isOpen}
-      onRequestClose={close}
+      isOpen={props.isOpen}
+      onRequestClose={props.close}
       onAfterClose={handleAfterClose}
     >
-      <div className="flex flex-col gap-3">
-        <Trigger event={event} {...trigger} />
-        {showCondition && <Condition {...condition} />}
-        <Actions event={event} {...actions} />
-        {error && <div className="text-error">{error}</div>}
-      </div>
+      {content}
     </Modal>
   );
 };

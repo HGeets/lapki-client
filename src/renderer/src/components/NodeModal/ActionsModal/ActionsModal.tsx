@@ -21,25 +21,35 @@ export interface ActionsModalData {
   isEditingEvent: boolean;
 }
 
-interface ActionsModalProps {
+interface ActionsModalBaseProps {
   smId: string;
   controller: CanvasController;
   initialData?: ActionsModalData;
-  isOpen: boolean;
   idx: number | null;
   onSubmit: (data: Action, idx?: number | null) => void;
-  onClose: () => void;
 }
 
-export const ActionsModal: React.FC<ActionsModalProps> = ({
-  initialData,
-  onSubmit,
-  controller,
-  smId,
-  isOpen,
-  onClose,
-  idx,
-}) => {
+// Пропы для оригинального режима отдельного модального окна
+interface ActionsModalStandaloneProps extends ActionsModalBaseProps {
+  embedded?: false;
+  isOpen: boolean;
+  onClose: () => void;
+  submitRef?: never;
+}
+
+interface ActionsModalEmbeddedProps extends ActionsModalBaseProps {
+  embedded: true;
+  isOpen?: never;
+  onClose?: never;
+  /** StateModal вызывает handleSubmit через этот ref по нажатию кнопки «Выбрать» */
+  submitRef: React.MutableRefObject<(() => void) | null>;
+}
+
+type ActionsModalProps = ActionsModalStandaloneProps | ActionsModalEmbeddedProps;
+
+export const ActionsModal: React.FC<ActionsModalProps> = (props) => {
+  const { smId, controller, initialData, idx, onSubmit, embedded } = props;
+
   const modelController = useModelContext();
   const model = modelController.model;
   const platforms = controller.useData('platform') as { [id: string]: PlatformManager };
@@ -81,7 +91,7 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
 
     let parameters: ArgList = {};
 
-    // Этот блок нужен для то чтобы по возвращению на начальное состояние сбросить параметры до начального состояния а не очищать совсем)
+    // Этот блок нужен для того чтобы по возвращению на начальное состояние сбросить параметры до начального состояния а не очищать совсем)
     if (initialData) {
       if (initialData.action.component === componentName && initialData.action.method === method) {
         parameters = initialData.action.args ?? {};
@@ -125,22 +135,22 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
     setErrors({});
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    e.stopPropagation(); // Для работы модалки внутри модалки, чтобы не отправлять родительскую форму
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!embedded) {
+      // В standalone-режиме для работы модалки внутри модалки, чтобы не отправлять родительскую форму
+      e?.stopPropagation();
+    }
 
     const platform = controller.platform[smId];
     if (
       protoParameters
-        .map((proto, idx) => {
+        .map((proto, i) => {
           const { name, type = '' } = proto;
-          const parameter = parameters[name] ?? { value: '', order: idx };
+          const parameter = parameters[name] ?? { value: '', order: i };
           const value = parameter.value;
           if (!proto.optional && (value === undefined || value === '')) {
-            setErrors((p) => ({
-              ...p,
-              [name]: `Обязательный параметр.`,
-            }));
+            setErrors((p) => ({ ...p, [name]: `Обязательный параметр.` }));
             return false;
           }
           if (Array.isArray(value)) {
@@ -148,12 +158,7 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
           }
           const componentAttribute = getComponentAttribute(value, platform);
           if (componentAttribute) {
-            // существует ли компонент с таким названием
-            if (
-              !componentWithVariablesOptions.find((opt) => {
-                return opt.value === componentAttribute[0];
-              })
-            ) {
+            if (!componentWithVariablesOptions.find((opt) => opt.value === componentAttribute[0])) {
               setErrors((p) => ({
                 ...p,
                 [name]: `Ошибка! Не удалось найти компонент с таким названием.`,
@@ -164,13 +169,8 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
               setErrors((p) => ({ ...p, [name]: `Выберите метод` }));
               return false;
             }
-            // существует ли атрибут с таким названием у данного компонента
             const attributeOptions = attributeOptionsSearch(componentAttribute[0]);
-            if (
-              !attributeOptions.find((opt) => {
-                return opt.value === componentAttribute[1];
-              })
-            ) {
+            if (!attributeOptions.find((opt) => opt.value === componentAttribute[1])) {
               setErrors((p) => ({
                 ...p,
                 [name]: `Ошибка! Не удалось найти атрибут с таким названием.`,
@@ -194,14 +194,7 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
     }
 
     if (!selectedComponent || !selectedMethod) return;
-    onSubmit(
-      {
-        component: selectedComponent,
-        method: selectedMethod,
-        args: parameters,
-      },
-      idx
-    );
+    onSubmit({ component: selectedComponent, method: selectedMethod, args: parameters }, idx);
     reset();
   };
 
@@ -210,7 +203,6 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
     // Сброс всего если нет начальных данных, то есть когда создаём новое событие
     if (!initialData) {
       reset();
-
       return;
     }
 
@@ -239,14 +231,8 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
     init(structuredClone(action), isEditingAction ? 'signals' : 'methods');
   }, [smId, controller, platforms, initialData]);
 
-  return (
-    <Modal
-      title={`Выберите ${isEditingEvent ? 'событие' : 'действие'}`}
-      onSubmit={handleSubmit}
-      overlayClassName="z-[60]"
-      isOpen={isOpen}
-      onRequestClose={onClose}
-    >
+  const content = (
+    <>
       <div className="mb-4 grid grid-cols-2 items-center gap-3">
         <Select
           className="w-full"
@@ -287,6 +273,24 @@ export const ActionsModal: React.FC<ActionsModalProps> = ({
         smId={smId}
         attributeOptionsSearch={attributeOptionsSearch}
       />
+    </>
+  );
+
+  if (embedded) {
+    // Пробрасываем handleSubmit в StateModal через ref
+    props.submitRef.current = handleSubmit;
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Modal
+      title={`Выберите ${isEditingEvent ? 'событие' : 'действие'}`}
+      onSubmit={handleSubmit}
+      overlayClassName="z-[60]"
+      isOpen={props.isOpen}
+      onRequestClose={props.onClose}
+    >
+      {content}
     </Modal>
   );
 };
